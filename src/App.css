@@ -389,4 +389,18 @@
 
 .modal-content button:hover {
   background: #0056b3;
+}
+
+.join-button {
+  padding: 6px 12px;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.join-button:hover {
+  background: #218838;
 } 

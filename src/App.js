@@ -261,22 +261,28 @@ const App = () => {
 
   // Gestione selezione canale
   const handleChannelSelect = async (channelKey) => {
-    setActiveChannel(channelKey);
-    setActiveContact(null);
-    setActiveAnnouncement(null);
+    try {
+      if (!chat) return;
 
-    const channel = channels.find(c => c.key === channelKey);
-    if (channel && chat) {
-      try {
-        const messageStream = await chat.loadMessagesOfChannel(channel);
-        if (messageStream?.on) {
-          messageStream.on((messagesList) => {
-            setMessages(messagesList);
-          });
-        }
-      } catch (error) {
-        console.error("Errore nel caricamento dei messaggi del canale:", error);
+      setActiveChannel(channelKey);
+
+      // Trova il canale selezionato
+      const selectedChannel = channels.find(c => c.key === channelKey) || 
+                            publicChannels.find(c => c.key === channelKey);
+
+      if (!selectedChannel) {
+        console.error('Canale non trovato');
+        return;
       }
+
+      // Carica i messaggi del canale
+      const messageStream = await chat.loadMessagesOfChannel(selectedChannel);
+      messageStream.on((messages) => {
+        setMessages(messages);
+      });
+
+    } catch (error) {
+      console.error('Errore nella selezione del canale:', error);
     }
   };
 
@@ -520,24 +526,65 @@ const App = () => {
   // Funzione per entrare in un canale pubblico
   const handleJoinPublicChannel = async (channel) => {
     try {
+      if (!chat || !chat.gun.user().is) {
+        console.error("Utente non autenticato");
+        return;
+      }
+
+      console.log("Tentativo di entrare nel canale:", channel.name);
+
+      // Entra nel canale pubblico
       await chat.joinPublicChannel(channel);
       
-      // Aggiorna la lista dei canali dopo l'ingresso
-      const channelsStream = await chat.loadChannels();
-      channelsStream.on((channelList) => {
-        setChannels(channelList);
+      // Crea una copia del canale con le proprietà necessarie
+      const newChannel = {
+        ...channel,
+        peers: channel.peers || {},
+        isPrivate: false,
+        disabled: false
+      };
+
+      // Aggiorna manualmente la lista dei canali
+      setChannels(prevChannels => {
+        // Verifica se il canale esiste già
+        const existingChannel = prevChannels.find(c => c.key === channel.key);
+        if (!existingChannel) {
+          console.log("Aggiunto nuovo canale:", newChannel.name);
+          return [...prevChannels, newChannel];
+        }
+        return prevChannels;
       });
 
-      // Seleziona automaticamente il nuovo canale
+      // Seleziona il canale
       setActiveChannel(channel.key);
+      setActiveContact(null);
+      setActiveAnnouncement(null);
       
       // Carica i messaggi del canale
-      const messageStream = await chat.loadMessagesOfChannel(channel);
-      messageStream.on((messages) => {
-        setMessages(messages);
-      });
+      try {
+        const messageStream = await chat.loadMessagesOfChannel(channel);
+        if (messageStream?.on) {
+          messageStream.on((messages) => {
+            console.log("Messaggi caricati:", messages);
+            setMessages(messages);
+          });
+        }
+      } catch (msgError) {
+        console.error("Errore nel caricamento dei messaggi:", msgError);
+      }
 
       setShowPublicChannels(false); // Chiudi la modale
+      
+      // Aggiorna la lista dei canali dopo un breve delay per assicurarsi che il canale sia stato aggiunto
+      setTimeout(async () => {
+        const channelsStream = chat.loadChannels();
+        if (channelsStream?.on) {
+          channelsStream.on((channelList) => {
+            setChannels(channelList);
+          });
+        }
+      }, 1000);
+
     } catch (error) {
       console.error("Errore nell'entrare nel canale:", error);
     }
@@ -568,7 +615,10 @@ const App = () => {
                     {Object.keys(channel.peers || {}).length} utenti
                   </span>
                 </div>
-                <button onClick={() => handleJoinPublicChannel(channel)}>
+                <button 
+                  onClick={() => handleJoinPublicChannel(channel)}
+                  className="join-button"
+                >
                   Entra
                 </button>
               </div>
@@ -630,10 +680,12 @@ const App = () => {
             <div
               key={channel.key}
               onClick={() => handleChannelSelect(channel.key)}
-              className={activeChannel === channel.key ? "active" : ""}
+              className={`channel-item ${activeChannel === channel.key ? "active" : ""}`}
             >
-              {channel.name}
-              {channel.notifCount > 0 && <span className="notification">{channel.notifCount}</span>}
+              <span className="channel-name">{channel.name}</span>
+              {channel.notifCount > 0 && (
+                <span className="notification-badge">{channel.notifCount}</span>
+              )}
             </div>
           ))}
         </div>
