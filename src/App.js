@@ -39,6 +39,10 @@ const App = () => {
   const [showPublicKeyModal, setShowPublicKeyModal] = useState(false);
   const [userPublicKey, setUserPublicKey] = useState('');
 
+  const [publicChannels, setPublicChannels] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showPublicChannels, setShowPublicChannels] = useState(false);
+
   useEffect(() => {
     try {
       const superpeers = ["http://localhost:8765/gun"];
@@ -55,6 +59,16 @@ const App = () => {
       setAuthError("Errore nella connessione al server");
     }
   }, []);
+
+  useEffect(() => {
+    if (!chat) return;
+
+    // Carica i canali pubblici
+    const publicStream = chat.loadPublicChannels();
+    publicStream.on((channelList) => {
+      setPublicChannels(channelList);
+    });
+  }, [chat]);
 
   // Gestione form di autenticazione
   const handleAuthInputChange = (e) => {
@@ -503,6 +517,52 @@ const App = () => {
     </div>
   );
 
+  // Funzione per entrare in un canale pubblico
+  const handleJoinPublicChannel = async (channel) => {
+    try {
+      await chat.joinPublicChannel(channel);
+      setShowPublicChannels(false);
+    } catch (error) {
+      console.error("Errore nell'entrare nel canale:", error);
+    }
+  };
+
+  // Componente per la lista dei canali pubblici
+  const PublicChannelsList = () => (
+    <div className="modal">
+      <div className="modal-content">
+        <h3>Canali Pubblici</h3>
+        <input
+          type="text"
+          placeholder="Cerca canali..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="search-input"
+        />
+        <div className="public-channels-list">
+          {publicChannels
+            .filter(channel => 
+              channel.name.toLowerCase().includes(searchTerm.toLowerCase())
+            )
+            .map(channel => (
+              <div key={channel.key} className="public-channel-item">
+                <div className="channel-info">
+                  <span className="channel-name">{channel.name}</span>
+                  <span className="user-count">
+                    {Object.keys(channel.peers || {}).length} utenti
+                  </span>
+                </div>
+                <button onClick={() => handleJoinPublicChannel(channel)}>
+                  Entra
+                </button>
+              </div>
+            ))}
+        </div>
+        <button onClick={() => setShowPublicChannels(false)}>Chiudi</button>
+      </div>
+    </div>
+  );
+
   // Se non è loggato, mostra il form di autenticazione
   if (!isLoggedIn) {
     return renderAuthForm();
@@ -545,7 +605,10 @@ const App = () => {
         <div className="channels">
           <div className="section-header">
             <h2>Canali</h2>
-            <button onClick={() => setShowNewChannelModal(true)}>+</button>
+            <div className="channel-buttons">
+              <button onClick={() => setShowNewChannelModal(true)}>+</button>
+              <button onClick={() => setShowPublicChannels(true)}>🔍</button>
+            </div>
           </div>
           {channels.map((channel) => (
             <div
@@ -602,6 +665,7 @@ const App = () => {
       {showNewChannelModal && <NewChannelModal />}
       {showNewContactModal && <NewContactModal />}
       {showNewAnnouncementModal && <NewAnnouncementModal />}
+      {showPublicChannels && <PublicChannelsList />}
     </div>
   );
 };
