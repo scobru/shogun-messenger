@@ -521,7 +521,23 @@ const App = () => {
   const handleJoinPublicChannel = async (channel) => {
     try {
       await chat.joinPublicChannel(channel);
-      setShowPublicChannels(false);
+      
+      // Aggiorna la lista dei canali dopo l'ingresso
+      const channelsStream = await chat.loadChannels();
+      channelsStream.on((channelList) => {
+        setChannels(channelList);
+      });
+
+      // Seleziona automaticamente il nuovo canale
+      setActiveChannel(channel.key);
+      
+      // Carica i messaggi del canale
+      const messageStream = await chat.loadMessagesOfChannel(channel);
+      messageStream.on((messages) => {
+        setMessages(messages);
+      });
+
+      setShowPublicChannels(false); // Chiudi la modale
     } catch (error) {
       console.error("Errore nell'entrare nel canale:", error);
     }
