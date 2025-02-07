@@ -61,10 +61,17 @@ const App = () => {
       const superpeers = ["http://localhost:8765/gun"];
       const unstoppableChat = new UnstoppableChat(superpeers);
       
-      // Verifica che l'istanza sia stata creata correttamente
+      // Verifica più approfondita dell'istanza
       if (!unstoppableChat || !unstoppableChat.gun) {
         throw new Error("Errore nell'inizializzazione della chat");
       }
+
+      // Inizializza Gun con le opzioni corrette
+      unstoppableChat.gun.opt({
+        peers: superpeers,
+        localStorage: false,
+        radisk: false
+      });
       
       setChat(unstoppableChat);
     } catch (error) {
@@ -82,6 +89,20 @@ const App = () => {
       setPublicChannels(channelList);
     });
   }, [chat]);
+
+  // Modifica l'useEffect per la chiave pubblica
+  useEffect(() => {
+    if (chat?.gun?.user().is) {  // Verifica più sicura
+      try {
+        const pub = chat.gun.user().is.pub;
+        if (pub) {
+          setUserPublicKey(pub);
+        }
+      } catch (error) {
+        console.error("Errore nell'accesso alla chiave pubblica:", error);
+      }
+    }
+  }, [chat, isLoggedIn]);
 
   // Gestione form di autenticazione
   const handleAuthInputChange = (e) => {
@@ -114,10 +135,10 @@ const App = () => {
     }
   };
 
-  // Gestione login
+  // Modifica la funzione handleLogin per gestire meglio l'autenticazione
   const handleLogin = async (e) => {
     e.preventDefault();
-    if (!chat) {
+    if (!chat?.gun) {
       setAuthError("Errore di inizializzazione della chat");
       return;
     }
@@ -127,6 +148,14 @@ const App = () => {
       if (!authForm.username || !authForm.password || !authForm.publicName) {
         throw new Error("Tutti i campi sono obbligatori");
       }
+
+      // Inizializza l'utente prima del join
+      await new Promise((resolve, reject) => {
+        chat.gun.user().auth(authForm.username, authForm.password, (ack) => {
+          if (ack.err) reject(new Error(ack.err));
+          else resolve();
+        });
+      });
 
       await chat.join(authForm.username, authForm.password, authForm.publicName);
       setIsLoggedIn(true);
@@ -266,13 +295,18 @@ const App = () => {
 
       messageStream.on((newMessages) => {
         setMessages(prev => {
-          // Evita aggiornamenti non necessari
+          // Verifica se i messaggi sono effettivamente cambiati
           if (JSON.stringify(prev) === JSON.stringify(newMessages)) {
             return prev;
           }
 
+          // Filtra i messaggi nulli o non validi
+          const validMessages = newMessages.filter(msg => 
+            msg && msg.msg && msg.time !== undefined
+          );
+
           // Ordina i messaggi per timestamp
-          const sortedMessages = [...newMessages].sort((a, b) => 
+          const sortedMessages = validMessages.sort((a, b) => 
             (a.time || 0) - (b.time || 0)
           );
 
@@ -280,7 +314,8 @@ const App = () => {
           return sortedMessages.map(msg => ({
             ...msg,
             type,
-            isOwn: msg.userPub === chat.gun.user().is.pub
+            isOwn: msg.userPub === chat.gun.user().is.pub,
+            time: msg.time || Date.now() // Fallback al timestamp corrente se mancante
           }));
         });
       });
@@ -628,7 +663,7 @@ const App = () => {
       <div className="modal-content">
         <h3>La tua Chiave Pubblica</h3>
         <div className="public-key-container">
-          <p>Username: {authForm.username}</p>
+          <p>Username: {chat?.gun?.user()?.is?.alias || authForm.username}</p>
           <p>Chiave Pubblica: {userPublicKey}</p>
           <button onClick={() => {
             navigator.clipboard.writeText(userPublicKey);
@@ -774,24 +809,36 @@ const App = () => {
       scrollToBottom();
     }, [messages]);
 
+    // Funzione per formattare la data
+    const formatMessageTime = (timestamp) => {
+      if (!timestamp) return '';
+      const date = new Date(timestamp);
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    };
+
     return (
       <div className="messages">
         {messages.map((message, i) => (
           <div 
             key={`${message.time}-${i}`}
-            className={`message ${message.isOwn ? 'own' : ''}`}
+            className={`message ${message.isOwn ? 'own' : ''} ${message.peerInfo?.action ? 'system' : ''}`}
           >
             <div className="message-header">
-              <span className="sender">{message.owner}</span>
+              <span className="sender">{message.owner || 'Sconosciuto'}</span>
               {message.time && (
                 <span className="time">
-                  {new Date(message.time).toLocaleTimeString()}
+                  {formatMessageTime(message.time)}
                 </span>
               )}
             </div>
             <div className="message-content">
               {message.link ? (
-                <a href={message.link} target="_blank" rel="noopener noreferrer">
+                <a 
+                  href={message.link} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="message-link"
+                >
                   {message.msg}
                 </a>
               ) : (
@@ -800,7 +847,9 @@ const App = () => {
             </div>
             {message.peerInfo?.action && (
               <div className="system-message">
-                {getSystemMessage(message.peerInfo)}
+                {message.peerInfo.action === 'join' && `${message.peerInfo.name} è entrato nel canale`}
+                {message.peerInfo.action === 'leave' && `${message.peerInfo.name} ha lasciato il canale`}
+                {message.peerInfo.action === 'message' && message.msg}
               </div>
             )}
           </div>
