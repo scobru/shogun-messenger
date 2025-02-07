@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { UnstoppableChat } from "@scobru/shogun";
-import './App.css';
+import "./App.css";
 
 const App = () => {
   const [chat, setChat] = useState(null);
@@ -26,25 +26,30 @@ const App = () => {
   // Nuovi stati per la gestione delle modal
   const [showNewChannelModal, setShowNewChannelModal] = useState(false);
   const [showNewContactModal, setShowNewContactModal] = useState(false);
-  const [showNewAnnouncementModal, setShowNewAnnouncementModal] = useState(false);
-  const [newChannelForm, setNewChannelForm] = useState({ name: '', isPrivate: false });
-  const [newContactForm, setNewContactForm] = useState({ 
-    username: '', 
-    pubKey: '' 
-  });
-  const [newAnnouncementForm, setNewAnnouncementForm] = useState({ 
-    name: '', 
+  const [showNewAnnouncementModal, setShowNewAnnouncementModal] =
+    useState(false);
+  const [newChannelForm, setNewChannelForm] = useState({
+    name: "",
     isPrivate: false,
-    rssLink: '' 
+  });
+  const [newContactForm, setNewContactForm] = useState({
+    username: "",
+    pubKey: "",
+  });
+  const [newAnnouncementForm, setNewAnnouncementForm] = useState({
+    name: "",
+    isPrivate: false,
+    rssLink: "",
   });
 
   // Aggiungi stato per mostrare/nascondere il modal della chiave pubblica
   const [showPublicKeyModal, setShowPublicKeyModal] = useState(false);
-  const [userPublicKey, setUserPublicKey] = useState('');
+  const [userPublicKey, setUserPublicKey] = useState("");
 
   const [publicChannels, setPublicChannels] = useState([]);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState("");
   const [showPublicChannels, setShowPublicChannels] = useState(false);
+  const [user, setUser] = useState(null);
 
   const messagesEndRef = useRef(null);
 
@@ -58,9 +63,15 @@ const App = () => {
 
   useEffect(() => {
     try {
-      const superpeers = ["http://localhost:8765/gun"];
+      const superpeers = {
+        peers: ["http://localhost:8765/gun"],
+        localStorage: false,
+        radisk: false,
+      };
+
       const unstoppableChat = new UnstoppableChat(superpeers);
-      
+      setUser(unstoppableChat.gun.user().recall({ sessionStorage: true }));
+
       // Verifica più approfondita dell'istanza
       if (!unstoppableChat || !unstoppableChat.gun) {
         throw new Error("Errore nell'inizializzazione della chat");
@@ -70,9 +81,9 @@ const App = () => {
       unstoppableChat.gun.opt({
         peers: superpeers,
         localStorage: false,
-        radisk: false
+        radisk: false,
       });
-      
+
       setChat(unstoppableChat);
     } catch (error) {
       console.error("Errore nell'inizializzazione:", error);
@@ -92,9 +103,10 @@ const App = () => {
 
   // Modifica l'useEffect per la chiave pubblica
   useEffect(() => {
-    if (chat?.gun?.user().is) {  // Verifica più sicura
+    if (user && user.is) {
+      // Verifica più sicura
       try {
-        const pub = chat.gun.user().is.pub;
+        const pub = user.is.pub;
         if (pub) {
           setUserPublicKey(pub);
         }
@@ -118,18 +130,16 @@ const App = () => {
     if (!chat) return;
 
     try {
-      await chat.gun.user().create(
-        authForm.username,
-        authForm.password,
-        (ack) => {
+      await chat.gun
+        .user()
+        .create(authForm.username, authForm.password, (ack) => {
           if (ack.err) {
             setAuthError(ack.err);
             return;
           }
           // Procedi con il login dopo la registrazione
           handleLogin(e);
-        }
-      );
+        });
     } catch (error) {
       setAuthError("Errore durante la registrazione: " + error.message);
     }
@@ -151,29 +161,34 @@ const App = () => {
 
       // Inizializza l'utente prima del join
       await new Promise((resolve, reject) => {
-        chat.gun.user().auth(authForm.username, authForm.password, (ack) => {
+        user.auth(authForm.username, authForm.password, (ack) => {
           if (ack.err) reject(new Error(ack.err));
           else resolve();
         });
       });
 
-      await chat.join(authForm.username, authForm.password, authForm.publicName);
+      await chat.join(
+        authForm.username,
+        authForm.password,
+        authForm.publicName
+      );
       setIsLoggedIn(true);
       setAuthError("");
-      
+
       // Caricamento dati con gestione parallela
       const loadData = async () => {
         try {
-          const [contactsStream, channelsStream, announcementsStream] = await Promise.all([
-            chat.loadContacts(),
-            chat.loadChannels(),
-            chat.loadAnnouncements()
-          ]);
+          const [contactsStream, channelsStream, announcementsStream] =
+            await Promise.all([
+              chat.loadContacts(),
+              chat.loadChannels(),
+              chat.loadAnnouncements(),
+            ]);
 
           // Gestione stream contatti
           if (contactsStream?.on) {
             contactsStream.on((contactsList) => {
-              setContacts(prev => {
+              setContacts((prev) => {
                 // Confronta e aggiorna solo se necessario
                 if (JSON.stringify(prev) !== JSON.stringify(contactsList)) {
                   return contactsList;
@@ -186,7 +201,7 @@ const App = () => {
           // Gestione stream canali
           if (channelsStream?.on) {
             channelsStream.on((channelsList) => {
-              setChannels(prev => {
+              setChannels((prev) => {
                 if (JSON.stringify(prev) !== JSON.stringify(channelsList)) {
                   return channelsList;
                 }
@@ -198,15 +213,16 @@ const App = () => {
           // Gestione stream annunci
           if (announcementsStream?.on) {
             announcementsStream.on((announcementsList) => {
-              setAnnouncements(prev => {
-                if (JSON.stringify(prev) !== JSON.stringify(announcementsList)) {
+              setAnnouncements((prev) => {
+                if (
+                  JSON.stringify(prev) !== JSON.stringify(announcementsList)
+                ) {
                   return announcementsList;
                 }
                 return prev;
               });
             });
           }
-
         } catch (error) {
           console.error("Errore nel caricamento dei dati:", error);
           setAuthError("Errore nel caricamento dei dati: " + error.message);
@@ -214,7 +230,6 @@ const App = () => {
       };
 
       loadData();
-
     } catch (error) {
       console.error("Errore durante il login:", error);
       setAuthError("Errore durante il login: " + error.message);
@@ -268,9 +283,7 @@ const App = () => {
           />
         </div>
         {authError && <div className="auth-error">{authError}</div>}
-        <button type="submit">
-          {isRegistering ? "Registrati" : "Accedi"}
-        </button>
+        <button type="submit">{isRegistering ? "Registrati" : "Accedi"}</button>
       </form>
       <button
         className="switch-auth"
@@ -294,32 +307,31 @@ const App = () => {
       }
 
       messageStream.on((newMessages) => {
-        setMessages(prev => {
+        setMessages((prev) => {
           // Verifica se i messaggi sono effettivamente cambiati
           if (JSON.stringify(prev) === JSON.stringify(newMessages)) {
             return prev;
           }
 
           // Filtra i messaggi nulli o non validi
-          const validMessages = newMessages.filter(msg => 
-            msg && msg.msg && msg.time !== undefined
+          const validMessages = newMessages.filter(
+            (msg) => msg && msg.msg && msg.time !== undefined
           );
 
           // Ordina i messaggi per timestamp
-          const sortedMessages = validMessages.sort((a, b) => 
-            (a.time || 0) - (b.time || 0)
+          const sortedMessages = validMessages.sort(
+            (a, b) => (a.time || 0) - (b.time || 0)
           );
 
           // Aggiungi metadati per il rendering
-          return sortedMessages.map(msg => ({
+          return sortedMessages.map((msg) => ({
             ...msg,
             type,
-            isOwn: msg.userPub === chat.gun.user().is.pub,
-            time: msg.time || Date.now() // Fallback al timestamp corrente se mancante
+            isOwn: msg.userPub === user.is.pub,
+            time: msg.time || Date.now(), // Fallback al timestamp corrente se mancante
           }));
         });
       });
-
     } catch (error) {
       console.error(`Errore nel caricamento dei messaggi ${type}:`, error);
       setMessages([]);
@@ -334,23 +346,25 @@ const App = () => {
       if (activeContact) {
         await chat.sendMessageToContact(activeContact, newMessage);
       } else if (activeChannel) {
-        const channel = channels.find(c => c.key === activeChannel);
+        const channel = channels.find((c) => c.key === activeChannel);
         if (channel) {
           await chat.sendMessageToChannel(channel, newMessage, {
-            pubKey: chat.gun.user().is.pub,
-            alias: chat.gun.user().is.alias,
+            pubKey: user.is.pub,
+            alias: user.is.alias,
             name: chat.publicName,
-            action: 'message'
+            action: "message",
           });
         }
       } else if (activeAnnouncement) {
-        const announcement = announcements.find(a => a.key === activeAnnouncement);
+        const announcement = announcements.find(
+          (a) => a.key === activeAnnouncement
+        );
         if (announcement) {
           await chat.sendMessageToAnnouncement(announcement, newMessage, {
-            pubKey: chat.gun.user().is.pub,
-            alias: chat.gun.user().is.alias,
+            pubKey: user.is.pub,
+            alias: user.is.alias,
             name: chat.publicName,
-            action: 'message'
+            action: "message",
           });
         }
       }
@@ -365,13 +379,11 @@ const App = () => {
     setActiveContact(pubKey);
     setActiveChannel(null);
     setActiveAnnouncement(null);
-    
-    const contact = contacts.find(c => c.pubKey === pubKey);
+
+    const contact = contacts.find((c) => c.pubKey === pubKey);
     if (contact) {
-      await handleMessageLoad(
-        'contact', 
-        pubKey,
-        () => chat.loadMessagesOfContact(pubKey)
+      await handleMessageLoad("contact", pubKey, () =>
+        chat.loadMessagesOfContact(pubKey)
       );
     }
   };
@@ -384,11 +396,12 @@ const App = () => {
       setActiveChannel(channelKey);
 
       // Trova il canale selezionato
-      const selectedChannel = channels.find(c => c.key === channelKey) || 
-                            publicChannels.find(c => c.key === channelKey);
+      const selectedChannel =
+        channels.find((c) => c.key === channelKey) ||
+        publicChannels.find((c) => c.key === channelKey);
 
       if (!selectedChannel) {
-        console.error('Canale non trovato');
+        console.error("Canale non trovato");
         return;
       }
 
@@ -397,9 +410,8 @@ const App = () => {
       messageStream.on((messages) => {
         setMessages(messages);
       });
-
     } catch (error) {
-      console.error('Errore nella selezione del canale:', error);
+      console.error("Errore nella selezione del canale:", error);
     }
   };
 
@@ -409,10 +421,12 @@ const App = () => {
     setActiveContact(null);
     setActiveChannel(null);
 
-    const announcement = announcements.find(a => a.key === announcementKey);
+    const announcement = announcements.find((a) => a.key === announcementKey);
     if (announcement && chat) {
       try {
-        const messageStream = await chat.loadMessagesOfAnnouncement(announcement);
+        const messageStream = await chat.loadMessagesOfAnnouncement(
+          announcement
+        );
         if (messageStream?.on) {
           messageStream.on((messagesList) => {
             setMessages(messagesList);
@@ -427,7 +441,7 @@ const App = () => {
   // Funzione migliorata per la creazione di canali
   const handleCreateChannel = async (e) => {
     e.preventDefault();
-    
+
     try {
       // Validazione
       if (!newChannelForm.name.trim()) {
@@ -436,7 +450,7 @@ const App = () => {
 
       // Verifica duplicati
       const channelExists = channels.some(
-        c => c.name.toLowerCase() === newChannelForm.name.toLowerCase()
+        (c) => c.name.toLowerCase() === newChannelForm.name.toLowerCase()
       );
       if (channelExists) {
         throw new Error("Esiste già un canale con questo nome");
@@ -448,18 +462,17 @@ const App = () => {
       );
 
       // Aggiorna i canali solo se necessario
-      setChannels(prev => {
+      setChannels((prev) => {
         const updated = [...prev, channel];
         return updated.sort((a, b) => a.name.localeCompare(b.name));
       });
 
       // Reset form e chiudi modal
-      setNewChannelForm({ name: '', isPrivate: false });
+      setNewChannelForm({ name: "", isPrivate: false });
       setShowNewChannelModal(false);
 
       // Seleziona automaticamente il nuovo canale
       handleChannelSelect(channel.key);
-
     } catch (error) {
       console.error("Errore nella creazione del canale:", error);
       setAuthError(error.message);
@@ -469,7 +482,7 @@ const App = () => {
   // Gestione aggiunta contatto
   const handleAddContact = async (e) => {
     e.preventDefault();
-    if (!chat || !chat.gun || !chat.gun.user().is) {
+    if (!chat || !chat.gun || !user.is) {
       setAuthError("Chat non inizializzata correttamente");
       return;
     }
@@ -490,25 +503,24 @@ const App = () => {
       }
 
       // Verifica che non si stia aggiungendo se stessi
-      if (pubKey === chat.gun.user().is.pub) {
+      if (pubKey === user.is.pub) {
         throw new Error("Non puoi aggiungere te stesso come contatto");
       }
 
       // Verifica che il contatto non esista già
-      const existingContact = contacts.find(c => c.pubKey === pubKey);
+      const existingContact = contacts.find((c) => c.pubKey === pubKey);
       if (existingContact) {
         throw new Error("Contatto già presente");
       }
 
       // Aggiungi il contatto
       const contact = await chat.addContact(username, pubKey);
-      
-      // Aggiorna la lista dei contatti
-      setContacts(prevContacts => [...prevContacts, contact]);
-      setShowNewContactModal(false);
-      setNewContactForm({ username: '', pubKey: '' });
-      setAuthError('');
 
+      // Aggiorna la lista dei contatti
+      setContacts((prevContacts) => [...prevContacts, contact]);
+      setShowNewContactModal(false);
+      setNewContactForm({ username: "", pubKey: "" });
+      setAuthError("");
     } catch (error) {
       console.error("Errore nell'aggiunta del contatto:", error);
       setAuthError(error.message);
@@ -526,7 +538,7 @@ const App = () => {
       );
       setAnnouncements([...announcements, announcement]);
       setShowNewAnnouncementModal(false);
-      setNewAnnouncementForm({ name: '', isPrivate: false, rssLink: '' });
+      setNewAnnouncementForm({ name: "", isPrivate: false, rssLink: "" });
     } catch (error) {
       console.error("Errore nella creazione dell'annuncio:", error);
     }
@@ -542,18 +554,27 @@ const App = () => {
             type="text"
             placeholder="Nome canale"
             value={newChannelForm.name}
-            onChange={(e) => setNewChannelForm({...newChannelForm, name: e.target.value})}
+            onChange={(e) =>
+              setNewChannelForm({ ...newChannelForm, name: e.target.value })
+            }
           />
           <label>
             <input
               type="checkbox"
               checked={newChannelForm.isPrivate}
-              onChange={(e) => setNewChannelForm({...newChannelForm, isPrivate: e.target.checked})}
+              onChange={(e) =>
+                setNewChannelForm({
+                  ...newChannelForm,
+                  isPrivate: e.target.checked,
+                })
+              }
             />
             Privato
           </label>
           <button type="submit">Crea</button>
-          <button type="button" onClick={() => setShowNewChannelModal(false)}>Annulla</button>
+          <button type="button" onClick={() => setShowNewChannelModal(false)}>
+            Annulla
+          </button>
         </form>
       </div>
     </div>
@@ -564,7 +585,10 @@ const App = () => {
       <div className="modal-content">
         <h3>Aggiungi nuovo contatto</h3>
         {authError && (
-          <div className="error-message" style={{ color: 'red', marginBottom: '10px' }}>
+          <div
+            className="error-message"
+            style={{ color: "red", marginBottom: "10px" }}
+          >
             {authError}
           </div>
         )}
@@ -576,13 +600,15 @@ const App = () => {
               type="text"
               placeholder="Inserisci username"
               value={newContactForm.username}
-              onChange={(e) => setNewContactForm({
-                ...newContactForm, 
-                username: e.target.value
-              })}
+              onChange={(e) =>
+                setNewContactForm({
+                  ...newContactForm,
+                  username: e.target.value,
+                })
+              }
               required
               autoComplete="off"
-              style={{ marginBottom: '10px', width: '100%', padding: '8px' }}
+              style={{ marginBottom: "10px", width: "100%", padding: "8px" }}
             />
           </div>
           <div className="input-group">
@@ -592,30 +618,40 @@ const App = () => {
               type="text"
               placeholder="Inserisci chiave pubblica"
               value={newContactForm.pubKey}
-              onChange={(e) => setNewContactForm({
-                ...newContactForm, 
-                pubKey: e.target.value
-              })}
+              onChange={(e) =>
+                setNewContactForm({
+                  ...newContactForm,
+                  pubKey: e.target.value,
+                })
+              }
               required
               autoComplete="off"
-              style={{ marginBottom: '10px', width: '100%', padding: '8px' }}
+              style={{ marginBottom: "10px", width: "100%", padding: "8px" }}
             />
           </div>
-          <div className="modal-buttons" style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-            <button 
-              type="button" 
+          <div
+            className="modal-buttons"
+            style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}
+          >
+            <button
+              type="button"
               onClick={() => {
                 setShowNewContactModal(false);
-                setAuthError('');
-                setNewContactForm({ username: '', pubKey: '' });
+                setAuthError("");
+                setNewContactForm({ username: "", pubKey: "" });
               }}
-              style={{ padding: '8px 16px' }}
+              style={{ padding: "8px 16px" }}
             >
               Annulla
             </button>
-            <button 
+            <button
               type="submit"
-              style={{ padding: '8px 16px', backgroundColor: '#007bff', color: 'white', border: 'none' }}
+              style={{
+                padding: "8px 16px",
+                backgroundColor: "#007bff",
+                color: "white",
+                border: "none",
+              }}
             >
               Aggiungi
             </button>
@@ -634,13 +670,23 @@ const App = () => {
             type="text"
             placeholder="Nome annuncio"
             value={newAnnouncementForm.name}
-            onChange={(e) => setNewAnnouncementForm({...newAnnouncementForm, name: e.target.value})}
+            onChange={(e) =>
+              setNewAnnouncementForm({
+                ...newAnnouncementForm,
+                name: e.target.value,
+              })
+            }
           />
           <label>
             <input
               type="checkbox"
               checked={newAnnouncementForm.isPrivate}
-              onChange={(e) => setNewAnnouncementForm({...newAnnouncementForm, isPrivate: e.target.checked})}
+              onChange={(e) =>
+                setNewAnnouncementForm({
+                  ...newAnnouncementForm,
+                  isPrivate: e.target.checked,
+                })
+              }
             />
             Privato
           </label>
@@ -648,10 +694,20 @@ const App = () => {
             type="text"
             placeholder="RSS Link (opzionale)"
             value={newAnnouncementForm.rssLink}
-            onChange={(e) => setNewAnnouncementForm({...newAnnouncementForm, rssLink: e.target.value})}
+            onChange={(e) =>
+              setNewAnnouncementForm({
+                ...newAnnouncementForm,
+                rssLink: e.target.value,
+              })
+            }
           />
           <button type="submit">Crea</button>
-          <button type="button" onClick={() => setShowNewAnnouncementModal(false)}>Annulla</button>
+          <button
+            type="button"
+            onClick={() => setShowNewAnnouncementModal(false)}
+          >
+            Annulla
+          </button>
         </form>
       </div>
     </div>
@@ -663,11 +719,15 @@ const App = () => {
       <div className="modal-content">
         <h3>La tua Chiave Pubblica</h3>
         <div className="public-key-container">
-          <p>Username: {chat?.gun?.user()?.is?.alias || authForm.username}</p>
+          <p>Username: {user?.is?.alias || authForm.username}</p>
           <p>Chiave Pubblica: {userPublicKey}</p>
-          <button onClick={() => {
-            navigator.clipboard.writeText(userPublicKey);
-          }}>Copia Chiave</button>
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(userPublicKey);
+            }}
+          >
+            Copia Chiave
+          </button>
         </div>
         <button onClick={() => setShowPublicKeyModal(false)}>Chiudi</button>
       </div>
@@ -677,7 +737,7 @@ const App = () => {
   // Funzione per entrare in un canale pubblico
   const handleJoinPublicChannel = async (channel) => {
     try {
-      if (!chat || !chat.gun.user().is) {
+      if (!chat || !user.is) {
         console.error("Utente non autenticato");
         return;
       }
@@ -686,19 +746,19 @@ const App = () => {
 
       // Entra nel canale pubblico
       await chat.joinPublicChannel(channel);
-      
+
       // Crea una copia del canale con le proprietà necessarie
       const newChannel = {
         ...channel,
         peers: channel.peers || {},
         isPrivate: false,
-        disabled: false
+        disabled: false,
       };
 
       // Aggiorna manualmente la lista dei canali
-      setChannels(prevChannels => {
+      setChannels((prevChannels) => {
         // Verifica se il canale esiste già
-        const existingChannel = prevChannels.find(c => c.key === channel.key);
+        const existingChannel = prevChannels.find((c) => c.key === channel.key);
         if (!existingChannel) {
           console.log("Aggiunto nuovo canale:", newChannel.name);
           return [...prevChannels, newChannel];
@@ -710,7 +770,7 @@ const App = () => {
       setActiveChannel(channel.key);
       setActiveContact(null);
       setActiveAnnouncement(null);
-      
+
       // Carica i messaggi del canale
       try {
         const messageStream = await chat.loadMessagesOfChannel(channel);
@@ -725,7 +785,7 @@ const App = () => {
       }
 
       setShowPublicChannels(false); // Chiudi la modale
-      
+
       // Aggiorna la lista dei canali dopo un breve delay per assicurarsi che il canale sia stato aggiunto
       setTimeout(async () => {
         const channelsStream = chat.loadChannels();
@@ -735,7 +795,6 @@ const App = () => {
           });
         }
       }, 1000);
-
     } catch (error) {
       console.error("Errore nell'entrare nel canale:", error);
     }
@@ -755,10 +814,10 @@ const App = () => {
         />
         <div className="public-channels-list">
           {publicChannels
-            .filter(channel => 
+            .filter((channel) =>
               channel.name.toLowerCase().includes(searchTerm.toLowerCase())
             )
-            .map(channel => (
+            .map((channel) => (
               <div key={channel.key} className="public-channel-item">
                 <div className="channel-info">
                   <span className="channel-name">{channel.name}</span>
@@ -766,7 +825,7 @@ const App = () => {
                     {Object.keys(channel.peers || {}).length} utenti
                   </span>
                 </div>
-                <button 
+                <button
                   onClick={() => handleJoinPublicChannel(channel)}
                   className="join-button"
                 >
@@ -811,31 +870,34 @@ const App = () => {
 
     // Funzione per formattare la data
     const formatMessageTime = (timestamp) => {
-      if (!timestamp) return '';
+      if (!timestamp) return "";
       const date = new Date(timestamp);
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return date.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
     };
 
     return (
       <div className="messages">
         {messages.map((message, i) => (
-          <div 
+          <div
             key={`${message.time}-${i}`}
-            className={`message ${message.isOwn ? 'own' : ''} ${message.peerInfo?.action ? 'system' : ''}`}
+            className={`message ${message.isOwn ? "own" : ""} ${
+              message.peerInfo?.action ? "system" : ""
+            }`}
           >
             <div className="message-header">
-              <span className="sender">{message.owner || 'Sconosciuto'}</span>
+              <span className="sender">{message.owner || "Sconosciuto"}</span>
               {message.time && (
-                <span className="time">
-                  {formatMessageTime(message.time)}
-                </span>
+                <span className="time">{formatMessageTime(message.time)}</span>
               )}
             </div>
             <div className="message-content">
               {message.link ? (
-                <a 
-                  href={message.link} 
-                  target="_blank" 
+                <a
+                  href={message.link}
+                  target="_blank"
                   rel="noopener noreferrer"
                   className="message-link"
                 >
@@ -847,9 +909,11 @@ const App = () => {
             </div>
             {message.peerInfo?.action && (
               <div className="system-message">
-                {message.peerInfo.action === 'join' && `${message.peerInfo.name} è entrato nel canale`}
-                {message.peerInfo.action === 'leave' && `${message.peerInfo.name} ha lasciato il canale`}
-                {message.peerInfo.action === 'message' && message.msg}
+                {message.peerInfo.action === "join" &&
+                  `${message.peerInfo.name} è entrato nel canale`}
+                {message.peerInfo.action === "leave" &&
+                  `${message.peerInfo.name} ha lasciato il canale`}
+                {message.peerInfo.action === "message" && message.msg}
               </div>
             )}
           </div>
@@ -871,7 +935,7 @@ const App = () => {
         <div className="user-info">
           <div>
             <span>Benvenuto, {authForm.publicName}</span>
-            <button 
+            <button
               className="show-key-btn"
               onClick={() => setShowPublicKeyModal(true)}
             >
@@ -893,7 +957,9 @@ const App = () => {
               className={activeContact === contact.pubKey ? "active" : ""}
             >
               {contact.name}
-              {contact.notifCount > 0 && <span className="notification">{contact.notifCount}</span>}
+              {contact.notifCount > 0 && (
+                <span className="notification">{contact.notifCount}</span>
+              )}
             </div>
           ))}
         </div>
@@ -910,7 +976,9 @@ const App = () => {
             <div
               key={channel.key}
               onClick={() => handleChannelSelect(channel.key)}
-              className={`channel-item ${activeChannel === channel.key ? "active" : ""}`}
+              className={`channel-item ${
+                activeChannel === channel.key ? "active" : ""
+              }`}
             >
               <span className="channel-name">{channel.name}</span>
               {channel.notifCount > 0 && (
@@ -929,17 +997,21 @@ const App = () => {
             <div
               key={announcement.key}
               onClick={() => handleAnnouncementSelect(announcement.key)}
-              className={activeAnnouncement === announcement.key ? "active" : ""}
+              className={
+                activeAnnouncement === announcement.key ? "active" : ""
+              }
             >
               {announcement.name}
-              {announcement.notifCount > 0 && <span className="notification">{announcement.notifCount}</span>}
+              {announcement.notifCount > 0 && (
+                <span className="notification">{announcement.notifCount}</span>
+              )}
             </div>
           ))}
         </div>
       </div>
 
       <div className="chat">
-        <MessageList messages={messages} currentUser={chat.gun.user().is.pub} />
+        <MessageList messages={messages} currentUser={user.is.pub} />
 
         <div className="input-area">
           <input
