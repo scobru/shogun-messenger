@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { UnstoppableChat } from "@scobru/shogun";
 import './App.css';
 
@@ -28,7 +28,10 @@ const App = () => {
   const [showNewContactModal, setShowNewContactModal] = useState(false);
   const [showNewAnnouncementModal, setShowNewAnnouncementModal] = useState(false);
   const [newChannelForm, setNewChannelForm] = useState({ name: '', isPrivate: false });
-  const [newContactForm, setNewContactForm] = useState({ username: '', pubKey: '', name: '' });
+  const [newContactForm, setNewContactForm] = useState({ 
+    username: '', 
+    pubKey: '' 
+  });
   const [newAnnouncementForm, setNewAnnouncementForm] = useState({ 
     name: '', 
     isPrivate: false,
@@ -42,6 +45,16 @@ const App = () => {
   const [publicChannels, setPublicChannels] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [showPublicChannels, setShowPublicChannels] = useState(false);
+
+  const messagesEndRef = useRef(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   useEffect(() => {
     try {
@@ -104,40 +117,77 @@ const App = () => {
   // Gestione login
   const handleLogin = async (e) => {
     e.preventDefault();
-    if (!chat) return;
+    if (!chat) {
+      setAuthError("Errore di inizializzazione della chat");
+      return;
+    }
 
     try {
+      // Validazione input
+      if (!authForm.username || !authForm.password || !authForm.publicName) {
+        throw new Error("Tutti i campi sono obbligatori");
+      }
+
       await chat.join(authForm.username, authForm.password, authForm.publicName);
       setIsLoggedIn(true);
       setAuthError("");
       
-      // Salva la chiave pubblica dell'utente
-      const publicKey = chat.gun.user().is.pub;
-      setUserPublicKey(publicKey);
+      // Caricamento dati con gestione parallela
+      const loadData = async () => {
+        try {
+          const [contactsStream, channelsStream, announcementsStream] = await Promise.all([
+            chat.loadContacts(),
+            chat.loadChannels(),
+            chat.loadAnnouncements()
+          ]);
 
-      // Caricamento dati con gestione degli errori
-      try {
-        const [contactsStream, channelsStream, announcementsStream] = await Promise.all([
-          chat.loadContacts(),
-          chat.loadChannels(),
-          chat.loadAnnouncements()
-        ]);
+          // Gestione stream contatti
+          if (contactsStream?.on) {
+            contactsStream.on((contactsList) => {
+              setContacts(prev => {
+                // Confronta e aggiorna solo se necessario
+                if (JSON.stringify(prev) !== JSON.stringify(contactsList)) {
+                  return contactsList;
+                }
+                return prev;
+              });
+            });
+          }
 
-        if (contactsStream?.on) {
-          contactsStream.on((contactsList) => setContacts(contactsList));
+          // Gestione stream canali
+          if (channelsStream?.on) {
+            channelsStream.on((channelsList) => {
+              setChannels(prev => {
+                if (JSON.stringify(prev) !== JSON.stringify(channelsList)) {
+                  return channelsList;
+                }
+                return prev;
+              });
+            });
+          }
+
+          // Gestione stream annunci
+          if (announcementsStream?.on) {
+            announcementsStream.on((announcementsList) => {
+              setAnnouncements(prev => {
+                if (JSON.stringify(prev) !== JSON.stringify(announcementsList)) {
+                  return announcementsList;
+                }
+                return prev;
+              });
+            });
+          }
+
+        } catch (error) {
+          console.error("Errore nel caricamento dei dati:", error);
+          setAuthError("Errore nel caricamento dei dati: " + error.message);
         }
+      };
 
-        if (channelsStream?.on) {
-          channelsStream.on((channelsList) => setChannels(channelsList));
-        }
+      loadData();
 
-        if (announcementsStream?.on) {
-          announcementsStream.on((announcementsList) => setAnnouncements(announcementsList));
-        }
-      } catch (error) {
-        console.error("Errore nel caricamento dei dati:", error);
-      }
     } catch (error) {
+      console.error("Errore durante il login:", error);
       setAuthError("Errore durante il login: " + error.message);
     }
   };
@@ -204,6 +254,43 @@ const App = () => {
     </div>
   );
 
+  // Nuova funzione per gestire i messaggi in modo unificato
+  const handleMessageLoad = async (type, id, loadFunction) => {
+    if (!chat || !id) return;
+
+    try {
+      const messageStream = await loadFunction();
+      if (!messageStream?.on) {
+        throw new Error("Stream messaggi non disponibile");
+      }
+
+      messageStream.on((newMessages) => {
+        setMessages(prev => {
+          // Evita aggiornamenti non necessari
+          if (JSON.stringify(prev) === JSON.stringify(newMessages)) {
+            return prev;
+          }
+
+          // Ordina i messaggi per timestamp
+          const sortedMessages = [...newMessages].sort((a, b) => 
+            (a.time || 0) - (b.time || 0)
+          );
+
+          // Aggiungi metadati per il rendering
+          return sortedMessages.map(msg => ({
+            ...msg,
+            type,
+            isOwn: msg.userPub === chat.gun.user().is.pub
+          }));
+        });
+      });
+
+    } catch (error) {
+      console.error(`Errore nel caricamento dei messaggi ${type}:`, error);
+      setMessages([]);
+    }
+  };
+
   // Gestione invio messaggi
   const handleSendMessage = async () => {
     if (!chat || !newMessage) return;
@@ -245,17 +332,12 @@ const App = () => {
     setActiveAnnouncement(null);
     
     const contact = contacts.find(c => c.pubKey === pubKey);
-    if (contact && chat) {
-      try {
-        const messageStream = await chat.loadMessagesOfContact(pubKey, contact.name);
-        if (messageStream?.on) {
-          messageStream.on((messagesList) => {
-            setMessages(messagesList);
-          });
-        }
-      } catch (error) {
-        console.error("Errore nel caricamento dei messaggi:", error);
-      }
+    if (contact) {
+      await handleMessageLoad(
+        'contact', 
+        pubKey,
+        () => chat.loadMessagesOfContact(pubKey)
+      );
     }
   };
 
@@ -307,19 +389,45 @@ const App = () => {
     }
   };
 
-  // Gestione creazione canale
+  // Funzione migliorata per la creazione di canali
   const handleCreateChannel = async (e) => {
     e.preventDefault();
+    
     try {
+      // Validazione
+      if (!newChannelForm.name.trim()) {
+        throw new Error("Il nome del canale è obbligatorio");
+      }
+
+      // Verifica duplicati
+      const channelExists = channels.some(
+        c => c.name.toLowerCase() === newChannelForm.name.toLowerCase()
+      );
+      if (channelExists) {
+        throw new Error("Esiste già un canale con questo nome");
+      }
+
       const channel = await chat.createChannel(
-        newChannelForm.name,
+        newChannelForm.name.trim(),
         newChannelForm.isPrivate
       );
-      setChannels([...channels, channel]);
-      setShowNewChannelModal(false);
+
+      // Aggiorna i canali solo se necessario
+      setChannels(prev => {
+        const updated = [...prev, channel];
+        return updated.sort((a, b) => a.name.localeCompare(b.name));
+      });
+
+      // Reset form e chiudi modal
       setNewChannelForm({ name: '', isPrivate: false });
+      setShowNewChannelModal(false);
+
+      // Seleziona automaticamente il nuovo canale
+      handleChannelSelect(channel.key);
+
     } catch (error) {
       console.error("Errore nella creazione del canale:", error);
+      setAuthError(error.message);
     }
   };
 
@@ -327,53 +435,48 @@ const App = () => {
   const handleAddContact = async (e) => {
     e.preventDefault();
     if (!chat || !chat.gun || !chat.gun.user().is) {
-      console.error("Chat non inizializzata correttamente");
+      setAuthError("Chat non inizializzata correttamente");
       return;
     }
 
     try {
-      // Verifica che tutti i campi siano compilati
-      if (!newContactForm.username || !newContactForm.pubKey || !newContactForm.name) {
+      // Applica trim() qui, al momento dell'invio
+      const username = newContactForm.username.trim();
+      const pubKey = newContactForm.pubKey.trim();
+
+      // Verifica che tutti i campi siano presenti
+      if (!username || !pubKey) {
         throw new Error("Tutti i campi sono obbligatori");
       }
 
       // Verifica formato della chiave pubblica
-      if (!newContactForm.pubKey.match(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)) {
+      if (!pubKey.match(/^[A-Za-z0-9._-]+$/)) {
         throw new Error("Formato chiave pubblica non valido");
       }
 
-      // Prima verifica se l'utente esiste
-      const user = await new Promise((resolve) => {
-        chat.gun.user(newContactForm.pubKey).once((user) => {
-          if (!user) {
-            resolve(null);
-          } else {
-            resolve(user);
-          }
-        });
-      });
+      // Verifica che non si stia aggiungendo se stessi
+      if (pubKey === chat.gun.user().is.pub) {
+        throw new Error("Non puoi aggiungere te stesso come contatto");
+      }
 
-      if (!user) {
-        throw new Error("Utente non trovato");
+      // Verifica che il contatto non esista già
+      const existingContact = contacts.find(c => c.pubKey === pubKey);
+      if (existingContact) {
+        throw new Error("Contatto già presente");
       }
 
       // Aggiungi il contatto
-      const contact = await chat.addContact(
-        newContactForm.username,
-        newContactForm.pubKey,
-        newContactForm.name
-      );
+      const contact = await chat.addContact(username, pubKey);
+      
+      // Aggiorna la lista dei contatti
+      setContacts(prevContacts => [...prevContacts, contact]);
+      setShowNewContactModal(false);
+      setNewContactForm({ username: '', pubKey: '' });
+      setAuthError('');
 
-      // Aggiorna la lista dei contatti solo se l'aggiunta è avvenuta con successo
-      if (contact) {
-        setContacts(prevContacts => [...prevContacts, contact]);
-        setShowNewContactModal(false);
-        setNewContactForm({ username: '', pubKey: '', name: '' });
-        setAuthError(''); // Pulisci eventuali errori precedenti
-      }
     } catch (error) {
       console.error("Errore nell'aggiunta del contatto:", error);
-      setAuthError(`Errore nell'aggiunta del contatto: ${error.message}`);
+      setAuthError(error.message);
     }
   };
 
@@ -424,49 +527,62 @@ const App = () => {
   const NewContactModal = () => (
     <div className="modal">
       <div className="modal-content">
-        <h3>Aggiungi contatto</h3>
-        <div className="modal-instructions">
-          <p>Per aggiungere un contatto hai bisogno di:</p>
-          <ul>
-            <li>Username dell'utente</li>
-            <li>Chiave pubblica dell'utente</li>
-            <li>Un nome per identificare il contatto</li>
-          </ul>
-        </div>
-        {authError && <div className="auth-error">{authError}</div>}
+        <h3>Aggiungi nuovo contatto</h3>
+        {authError && (
+          <div className="error-message" style={{ color: 'red', marginBottom: '10px' }}>
+            {authError}
+          </div>
+        )}
         <form onSubmit={handleAddContact}>
-          <input
-            type="text"
-            placeholder="Username"
-            value={newContactForm.username}
-            onChange={(e) => setNewContactForm({...newContactForm, username: e.target.value})}
-            required
-          />
-          <input
-            type="text"
-            placeholder="Chiave pubblica"
-            value={newContactForm.pubKey}
-            onChange={(e) => setNewContactForm({...newContactForm, pubKey: e.target.value})}
-            required
-          />
-          <input
-            type="text"
-            placeholder="Nome da visualizzare"
-            value={newContactForm.name}
-            onChange={(e) => setNewContactForm({...newContactForm, name: e.target.value})}
-            required
-          />
-          <div className="modal-buttons">
-            <button type="submit">Aggiungi</button>
+          <div className="input-group">
+            <label htmlFor="username">Username</label>
+            <input
+              id="username"
+              type="text"
+              placeholder="Inserisci username"
+              value={newContactForm.username}
+              onChange={(e) => setNewContactForm({
+                ...newContactForm, 
+                username: e.target.value
+              })}
+              required
+              autoComplete="off"
+              style={{ marginBottom: '10px', width: '100%', padding: '8px' }}
+            />
+          </div>
+          <div className="input-group">
+            <label htmlFor="pubkey">Chiave pubblica</label>
+            <input
+              id="pubkey"
+              type="text"
+              placeholder="Inserisci chiave pubblica"
+              value={newContactForm.pubKey}
+              onChange={(e) => setNewContactForm({
+                ...newContactForm, 
+                pubKey: e.target.value
+              })}
+              required
+              autoComplete="off"
+              style={{ marginBottom: '10px', width: '100%', padding: '8px' }}
+            />
+          </div>
+          <div className="modal-buttons" style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
             <button 
               type="button" 
               onClick={() => {
                 setShowNewContactModal(false);
                 setAuthError('');
-                setNewContactForm({ username: '', pubKey: '', name: '' });
+                setNewContactForm({ username: '', pubKey: '' });
               }}
+              style={{ padding: '8px 16px' }}
             >
               Annulla
+            </button>
+            <button 
+              type="submit"
+              style={{ padding: '8px 16px', backgroundColor: '#007bff', color: 'white', border: 'none' }}
+            >
+              Aggiungi
             </button>
           </div>
         </form>
@@ -629,6 +745,71 @@ const App = () => {
     </div>
   );
 
+  // Modifica handleAcceptContactInvite
+  const handleAcceptContactInvite = async (pubKey) => {
+    try {
+      await chat.acceptContactInvite(pubKey);
+      // Aggiorna la lista dei contatti
+      const contactsStream = chat.loadContacts();
+      if (contactsStream?.on) {
+        contactsStream.on((contactsList) => {
+          setContacts(contactsList);
+        });
+      }
+    } catch (error) {
+      console.error("Errore nell'accettazione dell'invito:", error);
+      setAuthError(error.message);
+    }
+  };
+
+  // Nuovo componente per il rendering dei messaggi
+  const MessageList = ({ messages, currentUser }) => {
+    const messagesEndRef = useRef(null);
+
+    const scrollToBottom = () => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    };
+
+    useEffect(() => {
+      scrollToBottom();
+    }, [messages]);
+
+    return (
+      <div className="messages">
+        {messages.map((message, i) => (
+          <div 
+            key={`${message.time}-${i}`}
+            className={`message ${message.isOwn ? 'own' : ''}`}
+          >
+            <div className="message-header">
+              <span className="sender">{message.owner}</span>
+              {message.time && (
+                <span className="time">
+                  {new Date(message.time).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
+            <div className="message-content">
+              {message.link ? (
+                <a href={message.link} target="_blank" rel="noopener noreferrer">
+                  {message.msg}
+                </a>
+              ) : (
+                <span>{message.msg}</span>
+              )}
+            </div>
+            {message.peerInfo?.action && (
+              <div className="system-message">
+                {getSystemMessage(message.peerInfo)}
+              </div>
+            )}
+          </div>
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+    );
+  };
+
   // Se non è loggato, mostra il form di autenticazione
   if (!isLoggedIn) {
     return renderAuthForm();
@@ -709,14 +890,7 @@ const App = () => {
       </div>
 
       <div className="chat">
-        <div className="messages">
-          {messages.map((message, i) => (
-            <div key={i} className="message">
-              <span className="sender">{message.owner}: </span>
-              <span className="text">{message.msg}</span>
-            </div>
-          ))}
-        </div>
+        <MessageList messages={messages} currentUser={chat.gun.user().is.pub} />
 
         <div className="input-area">
           <input

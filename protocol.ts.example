@@ -118,27 +118,6 @@ export default class UnstoppableChat {
     this.publicChannelsList = [];
   }
 
-  async validatePubKeyFromUsername(
-    username: string,
-    pubKey: string,
-  ): Promise<void> {
-    const gun = this.gun;
-    let verified = false;
-    return new Promise((resolve, reject) => {
-      gun.get(`~@${username}`).once((peerByUsername) => {
-        Object.keys(peerByUsername._['>']).forEach((uPub) => {
-          if (uPub.substr(1) === pubKey) {
-            verified = true;
-            resolve();
-          }
-        });
-        if (!verified) {
-          reject('Cannot validate pubkey from username');
-        }
-      });
-    });
-  }
-
   async join(username: string, password: string, publicName: string) {
     const gun = this.gun;
     return new Promise((resolve) => {
@@ -253,31 +232,88 @@ export default class UnstoppableChat {
     gun.user().leave();
   }
 
-  async addContact(username: string, pubKey: string, publicName: string) {
+  async addContact(username: string, pubKey: string) {
     const gun = this.gun;
-    if (!gun.user().is) return;
-    await this.validatePubKeyFromUsername(username, pubKey);
-    gun.get(pubKey).get('invites').get('contacts').get(gun.user().is.pub).put({
-      pubKey: gun.user().is.pub,
-      alias: gun.user().is.alias,
-      name: this.publicName,
-      disabled: false,
-    });
-    const contact = {
-      pubKey,
-      alias: username,
-      name: publicName,
-      disabled: false,
-    };
-    return new Promise((resolve) => {
-      gun
-        .user()
-        .get('contacts')
-        .get(pubKey)
-        .put(contact, () => {
-          resolve(contact);
+    if (!gun.user().is) {
+      throw new Error('Utente non autenticato');
+    }
+
+    try {
+      // Verifica che l'utente esista
+      const user = await new Promise((resolve) => {
+        gun.user(pubKey).once((user) => {
+          resolve(user);
         });
-    });
+      });
+
+      if (!user) {
+        throw new Error('Utente non trovato');
+      }
+
+      // Verifica se il contatto esiste già
+      const existingContact = await new Promise((resolve) => {
+        gun.user().get('contacts').map().once((contact, key) => {
+          if (contact && contact.pubKey === pubKey && !contact.disabled) {
+            resolve(contact);
+          }
+        });
+        resolve(null);
+      });
+
+      if (existingContact) {
+        throw new Error('Contatto già presente');
+      }
+
+      // Crea il contatto
+      const contact = {
+        pubKey,
+        alias: username,
+        name: username,
+        disabled: false,
+        time: Date.now()
+      };
+
+      // Salva il contatto
+      await new Promise((resolve, reject) => {
+        gun.user().get('contacts').set(contact, (ack) => {
+          if (ack.err) {
+            reject(new Error(ack.err));
+          } else {
+            resolve(true);
+          }
+        });
+      });
+
+      // Salva i dati della chat
+      const chatData = {
+        epub: user.epub,
+        enabled: true,
+        time: Date.now()
+      };
+
+      await new Promise((resolve) => {
+        gun.user().get('pchat').get(pubKey).put(chatData, resolve);
+      });
+
+      // Notifica l'altro utente
+      const invite = {
+        pubKey: gun.user().is.pub,
+        alias: gun.user().is.alias,
+        name: this.publicName,
+        disabled: false,
+        time: Date.now()
+      };
+
+      await new Promise((resolve) => {
+        gun.get(`~${pubKey}`).get('invites').set(invite, resolve);
+      });
+
+      return contact;
+
+    } catch (error) {
+      console.error('Errore nell\'aggiunta del contatto:', error);
+      throw error;
+    }
   }
 
   removeContact(pubKey: string) {
@@ -288,88 +324,30 @@ export default class UnstoppableChat {
   async loadContacts() {
     const gun = this.gun;
     if (!gun.user().is) return;
-    const contactsList = this.contactsList;
-    const loadedContacts = {};
+    
     const emitter = new EventEmitter();
-    gun
-      .user()
-      .get('contacts')
-      .not((key) => {
-        emitter.emit('contacts', contactsList);
+    const contactsList: Contact[] = [];
+    const loadedPubKeys = new Set();
+
+    gun.user().get('contacts').map().once((contact, key) => {
+      if (!contact || key === '_' || !contact.pubKey || contact.disabled) return;
+      if (loadedPubKeys.has(contact.pubKey)) return;
+
+      contactsList.push({
+        pubKey: contact.pubKey,
+        name: contact.name,
+        alias: contact.alias,
+        notifCount: 0
       });
-    gun
-      .user()
-      .get('contacts')
-      .on((contacts) => {
-        if (!contacts) {
-          return;
-        }
-        Object.keys(contacts).forEach((pubKey) => {
-          if (pubKey === '_' || pubKey === 'null') {
-            return;
-          }
-          gun
-            .user()
-            .get('contacts')
-            .get(pubKey)
-            .on((contact) => {
-              if (
-                !contact ||
-                (contact &&
-                  contact.name &&
-                  !contact.disabled &&
-                  loadedContacts[pubKey])
-              )
-                return;
-              if (contact.disabled && loadedContacts[pubKey]) {
-                const index = contactsList.map((c) => c.pubKey).indexOf(pubKey);
-                contactsList.splice(index, 1);
-                loadedContacts[pubKey] = false;
-              } else if (
-                !contact.disabled &&
-                contact.name &&
-                !loadedContacts[pubKey]
-              ) {
-                loadedContacts[pubKey] = true;
-                const contactIndex = contactsList.length;
-                contactsList.push({
-                  pubKey: contact.pubKey,
-                  alias: contact.alias,
-                  name: contact.name,
-                });
-                gun
-                  .get('pchat')
-                  .get(gun.user().is.pub)
-                  .get(contact.pubKey)
-                  .get('new')
-                  .on((newMsgs) => {
-                    if (!newMsgs) {
-                      return;
-                    }
-                    let newCount = 0;
-                    Object.keys(newMsgs).forEach((time) => {
-                      if (
-                        time === '_' ||
-                        time === 'disabled' ||
-                        !newMsgs[time] ||
-                        newMsgs[time] === 'disabled'
-                      ) {
-                        return;
-                      }
-                      newCount += 1;
-                    });
-                    contactsList[contactIndex].notifCount = newCount;
-                    emitter.emit('contacts', contactsList);
-                  });
-              }
-              emitter.emit('contacts', contactsList);
-            });
-        });
-      });
+
+      loadedPubKeys.add(contact.pubKey);
+      emitter.emit('contacts', contactsList);
+    });
+
     return {
       on: (cb: (param: Events['contacts']) => void) => {
         emitter.on('contacts', cb);
-      },
+      }
     };
   }
 
@@ -434,25 +412,44 @@ export default class UnstoppableChat {
     };
   }
 
-  async acceptContactInvite(
-    username: string,
-    pubKey: string,
-    publicName: string,
-  ) {
+  async acceptContactInvite(pubKey: string) {
     const gun = this.gun;
-    await this.validatePubKeyFromUsername(username, pubKey);
-    gun.user().get('contacts').get(pubKey).put({
-      pubKey,
-      alias: username,
-      name: publicName,
-      disabled: false,
-    });
-    gun
-      .get(gun.user()._.sea.pub)
-      .get('invites')
-      .get('contacts')
-      .get(pubKey)
-      .put({ disabled: true });
+    if (!gun.user().is) {
+      throw new Error('Utente non autenticato');
+    }
+
+    try {
+      // Ottieni il nome pubblico dell'utente
+      const publicName = await new Promise((resolve) => {
+        gun.user(pubKey).get('name').once((name) => {
+          resolve(name || 'Unknown');
+        });
+      });
+
+      // Crea il contatto
+      const contact = {
+        pubKey,
+        name: publicName,
+        alias: publicName,
+        disabled: false
+      };
+
+      // Salva il contatto
+      gun.user().get('contacts').get(pubKey).put(contact);
+
+      // Disabilita l'invito
+      gun
+        .get(gun.user()._.sea.pub)
+        .get('invites')
+        .get('contacts')
+        .get(pubKey)
+        .put({ disabled: true });
+
+      return contact;
+    } catch (error) {
+      console.error('Errore nell\'accettazione dell\'invito:', error);
+      throw error;
+    }
   }
 
   async denyContactInvite(pubKey: string) {
@@ -525,82 +522,96 @@ export default class UnstoppableChat {
       );
   }
 
-  async loadMessagesOfContact(pubKey: string, publicName: string) {
+  async loadMessagesOfContact(pubKey: string) {
     const gun = this.gun;
     if (!gun.user().is) return;
+    
     this.activeContact = pubKey;
     this.activeChannel = null;
+    
     const thisChat = this;
     const loadedMsgs = {};
     const loadedMsgsList: Message[] = [];
-    const otherPeer = await gun.user(pubKey);
-    let otherPeerEpub = otherPeer.epub;
     const emitter = new EventEmitter();
-    if (otherPeer.epub[2] === ':') {
-      otherPeerEpub = JSON.parse(otherPeer.epub)[':'];
-    }
-    async function loadMsgsOf(path, name, passedEmitter) {
-      path.not((key) => {
-        passedEmitter.emit('contactMessages', loadedMsgsList);
+
+    try {
+      // Ottieni l'epub dal contatto salvato
+      const chatData = await new Promise((resolve) => {
+        gun.user().get('pchat').get(pubKey).once(resolve);
       });
-      path.on((msgs) => {
-        if (!msgs) return;
-        Object.keys(msgs).forEach((time) => {
-          if (loadedMsgs[time]) return;
-          path.get(time).on(async (msgDataString) => {
-            if (
-              thisChat.activeContact !== pubKey ||
-              !msgDataString ||
-              msgDataString === 'null' ||
-              loadedMsgs[time]
-            )
-              return;
-            loadedMsgs[time] = true;
-            let msgData = msgDataString;
-            if (typeof msgDataString === 'string') {
-              msgData = JSON.parse(msgDataString);
-            }
-            if (!msgData || !msgData.msg) return;
-            if (typeof msgData.msg === 'string') {
-              msgData.msg = JSON.parse(
-                msgData.msg.substr(3, msgData.msg.length),
+
+      if (!chatData || !chatData.epub) {
+        throw new Error('Chiave epub non trovata per questo contatto');
+      }
+
+      const otherPeerEpub = chatData.epub;
+
+      async function loadMsgsOf(path, name, passedEmitter) {
+        path.not((key) => {
+          passedEmitter.emit('contactMessages', loadedMsgsList);
+        });
+        path.on((msgs) => {
+          if (!msgs) return;
+          Object.keys(msgs).forEach((time) => {
+            if (loadedMsgs[time]) return;
+            path.get(time).on(async (msgDataString) => {
+              if (
+                thisChat.activeContact !== pubKey ||
+                !msgDataString ||
+                msgDataString === 'null' ||
+                loadedMsgs[time]
+              )
+                return;
+              loadedMsgs[time] = true;
+              let msgData = msgDataString;
+              if (typeof msgDataString === 'string') {
+                msgData = JSON.parse(msgDataString);
+              }
+              if (!msgData || !msgData.msg) return;
+              if (typeof msgData.msg === 'string') {
+                msgData.msg = JSON.parse(
+                  msgData.msg.substr(3, msgData.msg.length),
+                );
+              }
+              const sec = await (Gun.SEA as any).secret(
+                otherPeerEpub,
+                gun.user()._.sea,
               );
-            }
-            const sec = await (Gun.SEA as any).secret(
-              otherPeerEpub,
-              gun.user()._.sea,
-            );
-            const decMsg = await Gun.SEA.decrypt(msgData.msg, sec);
-            if (!decMsg) return;
-            loadedMsgsList.push({
-              time: msgData.time,
-              msg: decMsg,
-              owner: name,
+              const decMsg = await Gun.SEA.decrypt(msgData.msg, sec);
+              if (!decMsg) return;
+              loadedMsgsList.push({
+                time: msgData.time,
+                msg: decMsg,
+                owner: name,
+              });
+              loadedMsgsList.sort((a: any, b: any) => a.time - b.time);
+              gun
+                .get('pchat')
+                .get(gun.user().is.pub)
+                .get(pubKey)
+                .get('new')
+                .get(msgData.time)
+                .put('disabled');
+              passedEmitter.emit('contactMessages', loadedMsgsList);
             });
-            loadedMsgsList.sort((a: any, b: any) => a.time - b.time);
-            gun
-              .get('pchat')
-              .get(gun.user().is.pub)
-              .get(pubKey)
-              .get('new')
-              .get(msgData.time)
-              .put('disabled');
-            passedEmitter.emit('contactMessages', loadedMsgsList);
           });
         });
-      });
+      }
+      loadMsgsOf(gun.user().get('pchat').get(pubKey), this.publicName, emitter);
+      loadMsgsOf(
+        gun.user(pubKey).get('pchat').get(gun.user()._.sea.pub),
+        this.publicName,
+        emitter,
+      );
+      return {
+        on: (cb: (param: Events['contactMessages']) => void) => {
+          emitter.on('contactMessages', cb);
+        },
+      };
+    } catch (error) {
+      console.error('Errore nel caricamento dei messaggi:', error);
+      throw error;
     }
-    loadMsgsOf(gun.user().get('pchat').get(pubKey), this.publicName, emitter);
-    loadMsgsOf(
-      gun.user(pubKey).get('pchat').get(gun.user()._.sea.pub),
-      publicName,
-      emitter,
-    );
-    return {
-      on: (cb: (param: Events['contactMessages']) => void) => {
-        emitter.on('contactMessages', cb);
-      },
-    };
   }
 
   async createChannel(channelName: string, isPrivate: boolean) {
